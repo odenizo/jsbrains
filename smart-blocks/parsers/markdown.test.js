@@ -321,6 +321,30 @@ Content under heading one
   const result = parse_blocks(markdown);
   t.deepEqual(result, expected);
 });
+test('content prior to first heading with multiple nested list items', t => {
+  const markdown = `non-list-non-heading-content
+- list item one
+  - nested list item one
+  - nested list item two
+- list item two
+  - nested list item three
+  - nested list item four
+
+# Heading One
+Content under heading one
+`;
+
+  const expected = {
+    "#": [1, 8],
+    "##{1}": [2, 4],
+    "##{2}": [5, 8],
+    "#Heading One": [9, 11],
+    "#Heading One#{1}": [10, 11]
+  };
+
+  const result = parse_blocks(markdown);
+  t.deepEqual(result, expected);
+});
 
 test('should handle code blocks', t => {
   const markdown = `# Heading
@@ -475,5 +499,31 @@ Content under second occurrence of top-level heading.
   };
 
   const result = parse_blocks(markdown);
+  t.deepEqual(result, expected);
+});
+
+
+test('respects start_index argument', t => {
+  const markdown = `non-list-non-heading-content
+- list item one
+  - nested list item one
+  - nested list item two
+- list item two
+  - nested list item three
+  - nested list item four
+
+# Heading One
+Content under heading one
+`;
+
+  const expected = {
+    "#": [0, 7],
+    "##{1}": [1, 3],
+    "##{2}": [4, 7],
+    "#Heading One": [8, 10],
+    "#Heading One#{1}": [9, 10]
+  };
+
+  const result = parse_blocks(markdown, 0);
   t.deepEqual(result, expected);
 });

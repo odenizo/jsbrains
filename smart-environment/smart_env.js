@@ -195,6 +195,7 @@ export class SmartEnv {
   }
 
   unload_main(main_key) {
+    this._components = {}; // clear component cache
     this.unload_collections(main_key);
     this.unload_opts(main_key);
     this[main_key] = null;
@@ -266,8 +267,8 @@ export class SmartEnv {
    * @returns {Promise<HTMLElement>}
    */
   async render_component(component_key, scope, opts = {}) {
-    const template = this.get_component(component_key, scope);
-    const frag = await template(scope, opts);
+    const component_renderer = this.get_component(component_key, scope);
+    const frag = await component_renderer(scope, opts);
     return frag;
   }
 
