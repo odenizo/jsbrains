@@ -118,7 +118,7 @@ var SmartModel = class {
    */
   async load() {
     this.set_state("loading");
-    if (!this.adapter?.loaded) {
+    if (!this.adapter?.is_loaded) {
       await this.invoke_adapter_method("load");
     }
     this.set_state("loaded");
@@ -129,7 +129,7 @@ var SmartModel = class {
    * @returns {Promise<void>}
    */
   async unload() {
-    if (this.adapter?.loaded) {
+    if (this.adapter?.is_loaded) {
       this.set_state("unloading");
       await this.invoke_adapter_method("unload");
       this.set_state("unloaded");
@@ -716,6 +716,7 @@ var SmartEmbedTransformersAdapter = class extends SmartEmbedAdapter {
   async load() {
     await this.load_transformers();
     this.loaded = true;
+    this.set_state("loaded");
   }
   /**
    * Unload model and free resources
@@ -723,13 +724,14 @@ var SmartEmbedTransformersAdapter = class extends SmartEmbedAdapter {
    */
   async unload() {
     if (this.pipeline) {
-      if (this.pipeline.destroy) await this.pipeline.destroy();
+      if (this.pipeline.destroy) this.pipeline.destroy();
       this.pipeline = null;
     }
     if (this.tokenizer) {
       this.tokenizer = null;
     }
     this.loaded = false;
+    this.set_state("unloaded");
   }
   /**
    * Initialize transformers pipeline and tokenizer
@@ -737,7 +739,7 @@ var SmartEmbedTransformersAdapter = class extends SmartEmbedAdapter {
    * @returns {Promise<void>}
    */
   async load_transformers() {
-    const { pipeline, env, AutoTokenizer } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.1.2");
+    const { pipeline, env, AutoTokenizer } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.2");
     env.allowLocalModels = false;
     const pipeline_opts = {
       quantized: true
@@ -814,6 +816,9 @@ var SmartEmbedTransformersAdapter = class extends SmartEmbedAdapter {
       });
     } catch (err) {
       console.error("error_processing_batch", err);
+      this.pipeline.dispose();
+      this.pipeline = null;
+      await this.load();
       return Promise.all(batch_inputs.map(async (item) => {
         try {
           const result = await this.pipeline(item.embed_input, { pooling: "mean", normalize: true });
@@ -967,6 +972,14 @@ async function process_message(data) {
           await model.load();
         }
         result = { model_loaded: true };
+        break;
+      case "unload":
+        console.log("unload", params);
+        if (model) {
+          await model.unload();
+          model = null;
+        }
+        result = { model_unloaded: true };
         break;
       case "embed_batch":
         if (!model) throw new Error("Model not loaded");

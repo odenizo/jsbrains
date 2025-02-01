@@ -51,6 +51,17 @@ export class SmartEnv {
     this._components = {};
   }
 
+  static wait_for(opts = {}) {
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (window.smart_env && window.smart_env.collections_loaded) {
+          clearInterval(interval);
+          resolve(window.smart_env);
+        }
+      }, 100);
+    });
+  }
+
   /**
    * Creates or updates a SmartEnv instance.
    * @param {Object} main - The main object to be added to the SmartEnv instance.
@@ -89,7 +100,7 @@ export class SmartEnv {
       // Reuse the existing environment
       main.env = global_env;
       main_key = main.env.init_main(main, main_env_opts);
-      await main.env.load_main(main_key);
+      await main.env.load_main(main_key, main_env_opts);
     }
     return main.env;
   }
@@ -99,7 +110,7 @@ export class SmartEnv {
     const main_key = this.init_main(main, main_env_opts);
     await this.fs.load_files(); // skips exclusions (smart_sources.fs respects exclusions); runs before smart_settings for detecting env_data_dir
     await SmartSettings.create(this);
-    await this.load_main(main_key);
+    await this.load_main(main_key, main_env_opts);
     this.is_init = false;
     return main_key;
   }
@@ -129,9 +140,9 @@ export class SmartEnv {
     return main_key;
   }
 
-  async load_main(main_key) {
+  async load_main(main_key, main_env_opts) {
     const main = this[main_key];
-    const main_env_opts = main.smart_env_config;
+    if(!main_env_opts) main_env_opts = main.smart_env_config;
     await this.init_collections(main_env_opts); // init so settings can be accessed
     await this.ready_to_load_collections(main);
     const main_collections = Object.keys(main_env_opts.collections || {}).reduce(
@@ -146,7 +157,7 @@ export class SmartEnv {
   }
 
   async init_collections(config = this.opts) {
-    for (const key of Object.keys(config.collections)) {
+    for (const key of Object.keys(config.collections || {})) {
       const _class = config.collections[key]?.class; // should always use `class` property since normalize_opts added ?? opts.collections[key];
       if (typeof _class?.init !== 'function') continue; // skip if not a class or no init
       await _class.init(this, { ...config.collections[key] });
@@ -155,7 +166,7 @@ export class SmartEnv {
 
   async load_collections(collections = this.collections) {
     this.loading_collections = true;
-    for (const key of Object.keys(collections)) {
+    for (const key of Object.keys(collections || {})) {
       if(this.is_init && (this.opts.prevent_load_on_init || collections[key].opts.prevent_load_on_init)) continue;
       if (typeof collections[key]?.process_load_queue === 'function') {
         await collections[key].process_load_queue();
@@ -194,22 +205,27 @@ export class SmartEnv {
     return true;
   }
 
-  unload_main(main_key) {
-    this.unload_collections(main_key);
-    this.unload_opts(main_key);
+  unload_main(main_key, unload_config=null) {
+    console.log('unload_main', main_key);
+    this._components = {}; // clear component cache
+    this.unload_collections(main_key, unload_config);
+    if(this.mains.length > 1) this.unload_opts(main_key, unload_config);
+    else this.opts = {};
     this[main_key] = null;
     this.mains = this.mains.filter((key) => key !== main_key);
     if (this.mains.length === 0) this.global_env = null;
   }
 
-  unload_collections(main_key) {
-    const main_config = this[main_key]?.smart_env_config;
-    if (!main_config) return;
-    for (const ckey of Object.keys(main_config.collections || {})) {
+  unload_collections(main_key, unload_config=null) {
+    console.log('unload_collections', main_key);
+    if (!unload_config) unload_config = this[main_key]?.smart_env_config;
+    if (!unload_config) return;
+    for (const ckey of Object.keys(unload_config.collections || {})) {
       if (!this[ckey]) continue;
       this[ckey].unload?.();
       this[ckey] = null;
     }
+    this.collections_loaded = false;
   }
 
   /**
@@ -217,14 +233,14 @@ export class SmartEnv {
    * Skips classes/functions, arrays, etc. Only plain objects are deeply iterated.
    * @param {string} main_key - The main key being unloaded.
    */
-  unload_opts(main_key) {
-    const remove_config = this[main_key]?.smart_env_config;
-    if (!remove_config) return;
+  unload_opts(main_key, unload_config=null) {
+    if (!unload_config) unload_config = this[main_key]?.smart_env_config;
+    if (!unload_config) return;
     const keep_configs = this.mains
       .filter((m) => m !== main_key)
       .map((m) => this[m]?.smart_env_config)
       .filter(Boolean);
-    deep_remove_exclusive_props(this.opts, remove_config, keep_configs);
+    deep_remove_exclusive_props(this.opts, unload_config, keep_configs);
   }
 
   save() {
@@ -266,8 +282,8 @@ export class SmartEnv {
    * @returns {Promise<HTMLElement>}
    */
   async render_component(component_key, scope, opts = {}) {
-    const template = this.get_component(component_key, scope);
-    const frag = await template(scope, opts);
+    const component_renderer = this.get_component(component_key, scope);
+    const frag = await component_renderer(scope, opts);
     return frag;
   }
 

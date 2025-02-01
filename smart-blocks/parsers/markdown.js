@@ -5,26 +5,29 @@
  * - Subheadings (nested headings are joined in the key with additional "#" characters)
  * - Frontmatter demarcated by "---" as a special heading: "#---frontmatter---"
  * - Code blocks delimited by triple backticks (```), which ignore headings found within
- * - Top-level list items treated as sub-blocks under their parent heading
+ * - Top-level list items treated as sub-blocks under their parent heading (customizable with `opts.line_keys`)
  *
  * The returned object keys reflect the path of headings (or list items) in the document, and
  * each value is an array of two numbers: the starting line and the ending line for that key's content.
  *
  * @function parse_blocks
  * @param {string} markdown - The complete Markdown text to parse.
+ * @param {Object} [opts={}] - Parsing options
+ * @param {number} [opts.start_index=1] - The line index to treat as line 1
+ * @param {boolean} [opts.line_keys=false] - If true, top-level list items get a key based on the line's first 30 characters instead of a sequence number
  * @returns {Object.<string, [number, number]>} A mapping of string keys (representing headings or sub-blocks)
  *   to an array of two numbers indicating the inclusive start and end line indices (1-based) in the Markdown text.
- * Example:
- * ```json
+ *
+ * @example
  * {
  *   "#Top-Level Heading": [1, 6],
- *   "#Top-Level Heading###Level 3 Heading (Skipping Level 2)": [3, 6],
+ *   "#Top-Level Heading##Level 3 Heading": [3, 6],
  *   "#Another Top-Level Heading": [7, 18],
  *   // ...
  * }
- * ```
  */
-export function parse_blocks(markdown) {
+export function parse_blocks(markdown, opts={}) {
+  const { start_index = 1, line_keys = false } = opts;
   const lines = markdown.split('\n');
 
   // The final result object mapping block-keys to line ranges: [start_line, end_line].
@@ -65,7 +68,7 @@ export function parse_blocks(markdown) {
   sub_block_counts[root_heading_key] = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const line_number = i + 1;
+    const line_number = i + start_index;
     const line = lines[i];
     const trimmed_line = line.trim();
 
@@ -96,7 +99,9 @@ export function parse_blocks(markdown) {
       // Include the code block line as part of the content for whichever block is open.
       if (!current_content_block) {
         // Start a new content block (or sub-block) if not already within one.
-        const parent_key = heading_stack.length > 0 ? heading_stack[heading_stack.length - 1].key : root_heading_key;
+        const parent_key = heading_stack.length > 0
+          ? heading_stack[heading_stack.length - 1].key
+          : root_heading_key;
 
         if (parent_key === root_heading_key && !heading_lines[root_heading_key]) {
           // If no heading yet, root acts as heading for this code block.
@@ -107,7 +112,10 @@ export function parse_blocks(markdown) {
           // Directly under root heading
           current_content_block = { key: root_heading_key, start_line: line_number };
           // Possibly update the end line for the root heading key.
-          if (heading_lines[root_heading_key][1] === null || heading_lines[root_heading_key][1] < line_number) {
+          if (
+            heading_lines[root_heading_key][1] === null ||
+            heading_lines[root_heading_key][1] < line_number
+          ) {
             heading_lines[root_heading_key][1] = null; // Will set proper end later
           }
         } else {
@@ -213,10 +221,9 @@ export function parse_blocks(markdown) {
     }
 
     // Check for top-level list items (no indentation, starting with "- ").
-    const list_match = line.match(/^(\s*)- (.+)$/);
+    const list_match = line.match(/^(\s*)([-*]|\d+\.) (.+)$/);
     if (list_match && !in_code_block) {
       const indentation = list_match[1].length;
-      // Only consider unindented lines as top-level list items.
       if (indentation === 0) {
         // Close any currently open list item.
         if (current_list_item) {
@@ -226,8 +233,11 @@ export function parse_blocks(markdown) {
           current_list_item = null;
         }
 
-        // Close any open content block.
-        if (current_content_block) {
+        // If the current content block is NOT the root heading, then close it.
+        if (
+          current_content_block &&
+          current_content_block.key !== root_heading_key
+        ) {
           if (heading_lines[current_content_block.key][1] === null) {
             heading_lines[current_content_block.key][1] = line_number - 1;
           }
@@ -235,7 +245,9 @@ export function parse_blocks(markdown) {
         }
 
         // Determine the parent heading key.
-        let parent_key = heading_stack.length > 0 ? heading_stack[heading_stack.length - 1].key : root_heading_key;
+        let parent_key = heading_stack.length > 0
+          ? heading_stack[heading_stack.length - 1].key
+          : root_heading_key;
 
         // If the parent is root, ensure the root heading range is initialized.
         if (parent_key === root_heading_key && !heading_lines[root_heading_key]) {
@@ -249,8 +261,15 @@ export function parse_blocks(markdown) {
         sub_block_counts[parent_key] += 1;
         const n = sub_block_counts[parent_key];
 
-        // Build a key representing this list item.
-        const key = `${parent_key}#{${n}}`;
+        let key;
+        if (line_keys) {
+          // Use the first three longest words of the list item content in the key (same order as in the line)
+          const words = get_longest_words_in_order(list_match[3], 10);
+          key = `${parent_key}#${words}`;
+        } else {
+          key = `${parent_key}#{${n}}`;
+        }
+
         heading_lines[key] = [line_number, null];
 
         // Mark this as the current list item.
@@ -270,7 +289,6 @@ export function parse_blocks(markdown) {
     }
 
     // If none of the above conditions met, we're dealing with normal content lines.
-    // Create or continue a content block under the parent heading.
     if (!current_content_block) {
       // If there's a list item open, close it; this content isn't part of that list item.
       if (current_list_item) {
@@ -281,14 +299,19 @@ export function parse_blocks(markdown) {
       }
 
       // Determine the parent heading key (or use root if none).
-      let parent_key = heading_stack.length > 0 ? heading_stack[heading_stack.length - 1].key : root_heading_key;
+      let parent_key = heading_stack.length > 0
+        ? heading_stack[heading_stack.length - 1].key
+        : root_heading_key;
 
       // If content is under the root, make sure the root heading range is set.
       if (parent_key === root_heading_key) {
         if (!heading_lines[root_heading_key]) {
           heading_lines[root_heading_key] = [line_number, null];
         }
-        if (heading_lines[root_heading_key][1] === null || heading_lines[root_heading_key][1] < line_number) {
+        if (
+          heading_lines[root_heading_key][1] === null ||
+          heading_lines[root_heading_key][1] < line_number
+        ) {
           heading_lines[root_heading_key][1] = null; // Defer finalizing the end line
         }
         current_content_block = { key: root_heading_key, start_line: line_number };
@@ -304,9 +327,7 @@ export function parse_blocks(markdown) {
         current_content_block = { key, start_line: line_number };
       }
     }
-
-    // Continue reading lines until something else (heading, list item, code block) closes this content block.
-    continue;
+    // We continue reading lines until something else (heading, list item, code block) closes this content block.
   }
 
   // After processing all lines, close any open headings, list items, or content blocks with the last line as their end.
@@ -314,27 +335,27 @@ export function parse_blocks(markdown) {
   while (heading_stack.length > 0) {
     const finished_heading = heading_stack.pop();
     if (heading_lines[finished_heading.key][1] === null) {
-      heading_lines[finished_heading.key][1] = total_lines;
+      heading_lines[finished_heading.key][1] = total_lines + start_index - 1;
     }
   }
 
   if (current_list_item) {
     if (heading_lines[current_list_item.key][1] === null) {
-      heading_lines[current_list_item.key][1] = total_lines;
+      heading_lines[current_list_item.key][1] = total_lines + start_index - 1;
     }
     current_list_item = null;
   }
 
   if (current_content_block) {
     if (heading_lines[current_content_block.key][1] === null) {
-      heading_lines[current_content_block.key][1] = total_lines;
+      heading_lines[current_content_block.key][1] = total_lines + start_index - 1;
     }
     current_content_block = null;
   }
 
   // If the root heading was opened but never closed, close it at the final line.
   if (heading_lines[root_heading_key] && heading_lines[root_heading_key][1] === null) {
-    heading_lines[root_heading_key][1] = total_lines;
+    heading_lines[root_heading_key][1] = total_lines + start_index - 1;
   }
 
   // Build the final result object from heading_lines.
@@ -343,4 +364,9 @@ export function parse_blocks(markdown) {
   }
 
   return result;
+}
+
+export function get_longest_words_in_order(line, n=3) {
+  const words = line.split(/\s+/).sort((a, b) => b.length - a.length).slice(0, n);
+  return words.sort((a, b) => line.indexOf(a) - line.indexOf(b)).join(' ');
 }
