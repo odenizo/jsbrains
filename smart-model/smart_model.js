@@ -161,7 +161,7 @@ export class SmartModel {
    */
   async load() {
     this.set_state('loading');
-    if (!this.adapter?.loaded) {
+    if (!this.adapter?.is_loaded) {
       await this.invoke_adapter_method('load');
     }
     this.set_state('loaded');
@@ -173,7 +173,7 @@ export class SmartModel {
    * @returns {Promise<void>}
    */
   async unload() {
-    if (this.adapter?.loaded) {
+    if (this.adapter?.is_loaded) {
       this.set_state('unloading');
       await this.invoke_adapter_method('unload');
       this.set_state('unloaded');
@@ -325,10 +325,10 @@ export class SmartModel {
   process_settings_config(_settings_config, prefix = null) {
     return Object.entries(_settings_config)
       .reduce((acc, [key, val]) => {
-        if (val.conditional) {
-          if (!val.conditional(this)) return acc;
-          delete val.conditional; // remove conditional to prevent re-checking downstream
-        }
+        // if (val.conditional) {
+        //   if (!val.conditional(this)) return acc;
+        //   delete val.conditional; // remove conditional to prevent re-checking downstream
+        // }
         const new_key = (prefix ? prefix + "." : "") + this.process_setting_key(key);
         acc[new_key] = val;
         return acc;

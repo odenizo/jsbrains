@@ -145,10 +145,10 @@ export class Collection {
     if (typeof filter_opts === 'function') {
       return Object.values(this.items).filter(filter_opts);
     }
-    this.filter_opts = this.prepare_filter(filter_opts);
+    filter_opts = this.prepare_filter(filter_opts);
 
     const results = [];
-    const { first_n } = this.filter_opts;
+    const { first_n } = filter_opts;
 
     for (const item of Object.values(this.items)) {
       if (first_n && results.length >= first_n) break;
@@ -229,24 +229,6 @@ export class Collection {
    */
   clear() {
     this.items = {};
-  }
-
-  /**
-   * Deletes an item by key from the collection (does not save deletion, just removes from memory).
-   * @param {string} key
-   */
-  delete_item(key) {
-    delete this.items[key];
-  }
-
-  /**
-   * Deletes multiple items by their keys. Internally calls `item.delete()` which queues a save.
-   * @param {string[]} keys
-   */
-  delete_many(keys = []) {
-    keys.forEach((key) => {
-      if (this.items[key]) this.items[key].delete();
-    });
   }
 
   /**
@@ -476,11 +458,12 @@ export class Collection {
     this.loaded = null;
     this.load_time_ms = null;
     Object.values(this.items).forEach((item) => item.queue_load());
-    this.notices?.show(`loading ${this.collection_key}`, `Loading ${this.collection_key}...`, { timeout: 0 });
+    this.notices?.show("loading_collection", { collection_key: this.collection_key });
     await this.process_load_queue();
-    this.notices?.remove(`loading ${this.collection_key}`);
-    this.notices?.show('done loading', `${this.collection_key} loaded`, { timeout: 3000 });
+    this.notices?.remove("loading_collection");
+    this.notices?.show("done_loading_collection", { collection_key: this.collection_key });
     this.render_settings();
+
   }
   /**
    * Helper function to render a component in the collection scope

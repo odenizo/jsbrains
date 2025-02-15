@@ -4,7 +4,7 @@
  */
 
 import { CollectionItem } from "smart-collections";
-import { sort_by_score } from "smart-entities/utils/sort_by_score.js";
+// import { sort_by_score } from "smart-entities/utils/sort_by_score.js";
 import { DefaultEntityVectorAdapter } from "./adapters/default.js";
 import { render as render_entity_component } from "./components/entity.js";
 
@@ -131,20 +131,21 @@ export class SmartEntity extends CollectionItem {
    * @returns {Array<{item:Object, score:number}>} An array of result objects with score and item.
    */
   async find_connections(params = {}) {
-    const filter_opts = this.prepare_find_connections_filter_opts(params);
-    const limit = params.filter?.limit
-      || params.limit // DEPRECATED: for backwards compatibility
-      || this.env.settings.smart_view_filter?.results_limit
-      || 10;
-    const cache_key = this.key + JSON.stringify(params); // no objects/instances in cache key
-    if (!this.env.connections_cache) this.env.connections_cache = {};
-    if (!this.env.connections_cache[cache_key]) {
-      const connections = (await this.nearest(filter_opts))
-        .sort(sort_by_score)
-        .slice(0, limit);
-      this.connections_to_cache(cache_key, connections);
-    }
-    return this.connections_from_cache(cache_key);
+    return await this.actions.find_connections(params);
+    // const filter_opts = this.prepare_find_connections_filter_opts(params);
+    // const limit = params.filter?.limit
+    //   || params.limit // DEPRECATED: for backwards compatibility
+    //   || this.env.settings.smart_view_filter?.results_limit
+    //   || 10;
+    // const cache_key = this.key + JSON.stringify(params); // no objects/instances in cache key
+    // if (!this.env.connections_cache) this.env.connections_cache = {};
+    // if (!this.env.connections_cache[cache_key]) {
+    //   const connections = (await this.nearest(filter_opts))
+    //     .sort(sort_by_score)
+    //     .slice(0, limit);
+    //   this.connections_to_cache(cache_key, connections);
+    // }
+    // return this.connections_from_cache(cache_key);
   }
 
   /**
@@ -171,10 +172,29 @@ export class SmartEntity extends CollectionItem {
     if(!this.data.last_read) this.data.last_read = {};
     this.data.last_read.hash = hash;
   }
-  get embed_hash() { return this.data.last_embed?.hash; }
+  get embedding_data() {
+    if(!this.data.embeddings[this.embed_model_key]){
+      this.data.embeddings[this.embed_model_key] = {};
+    }
+    return this.data.embeddings[this.embed_model_key];
+  }
+  get last_embed() {
+    if(!this.embedding_data.last_embed){
+      this.embedding_data.last_embed = {};
+
+      // temporary for backwards compatibility
+      if(this.data.last_embed){
+        this.embedding_data.last_embed = this.data.last_embed;
+        delete this.data.last_embed;
+        this.queue_save();
+      }
+    }
+    return this.embedding_data.last_embed;
+  }
+  get embed_hash() { return this.last_embed?.hash; }
   set embed_hash(hash) {
-    if(!this.data.last_embed) this.data.last_embed = {};
-    this.data.last_embed.hash = hash;
+    if(!this.embedding_data.last_embed) this.embedding_data.last_embed = {};
+    this.embedding_data.last_embed.hash = hash;
   }
 
   /**
@@ -237,14 +257,13 @@ export class SmartEntity extends CollectionItem {
    * @readonly
    * @returns {number|undefined} The number of tokens, or undefined if not set.
    */
-  get tokens() { return this.data.last_embed?.tokens; }
+  get tokens() { return this.last_embed?.tokens; }
   /**
    * Sets the number of tokens for the embedding.
    * @param {number} tokens - The number of tokens.
    */
   set tokens(tokens) {
-    if (!this.data.last_embed) this.data.last_embed = {};
-    this.data.last_embed.tokens = tokens;
+    this.last_embed.tokens = tokens;
   }
 
   /**
@@ -294,6 +313,12 @@ export class SmartEntity extends CollectionItem {
    */
   get component() { return render_entity_component; }
 
+  get is_unembedded() {
+    if(!this.vec) return true;
+    if(!this.embed_hash || this.embed_hash !== this.read_hash) return true;
+    return false;
+  }
+
   // COMPONENTS 2024-11-27
   get connections_component() {
     if(!this._connections_component) this._connections_component = this.components?.connections?.bind(this.smart_view);
@@ -308,4 +333,12 @@ export class SmartEntity extends CollectionItem {
     }
     return frag;
   }
+}
+
+import { find_connections } from "./actions/find_connections.js";
+export default {
+  class: SmartEntity,
+  actions: {
+    find_connections: find_connections,
+  },
 }

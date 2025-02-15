@@ -74,7 +74,7 @@ export class SmartEntities extends Collection {
    */
   async unload() {
     if (typeof this.embed_model?.unload === 'function') {
-      await this.embed_model.unload();
+      this.embed_model.unload();
       this.embed_model = null; // triggers new instance on next access
     }
     super.unload();
@@ -154,9 +154,13 @@ export class SmartEntities extends Collection {
    * @returns {Promise<Array<{item:Object, score:number}>>} An array of result objects with score and item.
    */
   async nearest(vec, filter = {}) {
-    if (!vec) return console.warn("nearest: no vec");
+    if (!vec) {
+      console.warn("nearest: no vec");
+      return [];
+    }
     return await this.entities_vector_adapter.nearest(vec, filter);
   }
+
 
   /**
    * Finds the furthest entities from a vector using the default adapter.
@@ -230,12 +234,12 @@ export class SmartEntities extends Collection {
         else if (Array.isArray(include_filter)) opts.key_starts_with_any.push(...include_filter);
       }
       // exclude inlinks
-      if (exclude_inlinks && this.links?.[entity.path]) {
+      if (exclude_inlinks && entity?.inlinks?.length) {
         if (!Array.isArray(opts.exclude_key_starts_with_any)) opts.exclude_key_starts_with_any = [];
-        opts.exclude_key_starts_with_any.push(...Object.keys(this.links?.[entity.path] || {}));
+        opts.exclude_key_starts_with_any.push(...entity.inlinks);
       }
       // exclude outlinks
-      if (exclude_outlinks) {
+      if (exclude_outlinks && entity?.outlinks?.length) {
         if (!Array.isArray(opts.exclude_key_starts_with_any)) opts.exclude_key_starts_with_any = [];
         opts.exclude_key_starts_with_any.push(...entity.outlinks);
       }

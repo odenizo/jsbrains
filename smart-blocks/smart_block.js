@@ -249,7 +249,6 @@ export class SmartBlock extends SmartEntity {
     return false;
   }
 
-  get last_embed() { return this.data.last_embed; }
   get last_read() { return this.data.last_read; }
   
   /**
@@ -409,4 +408,12 @@ export class SmartBlock extends SmartEntity {
    * @returns {string} The source key.
    */
   get note_key() { return this.key.split("#")[0]; }
+}
+
+import { find_connections } from "smart-entities/actions/find_connections.js";
+export default {
+  class: SmartBlock,
+  actions: {
+    find_connections: find_connections,
+  },
 }

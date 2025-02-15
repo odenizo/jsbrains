@@ -9,6 +9,7 @@ import { EntitiesVectorAdapter, EntityVectorAdapter } from "./_adapter.js";
 import { cos_sim } from "../utils/cos_sim.js";
 import { results_acc, furthest_acc } from "../utils/results_acc.js";
 import { sort_by_score_ascending, sort_by_score_descending } from "../utils/sort_by_score.js";
+
 /**
  * @class DefaultEntitiesVectorAdapter
  * @extends EntitiesVectorAdapter
@@ -20,8 +21,15 @@ import { sort_by_score_ascending, sort_by_score_descending } from "../utils/sort
 export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
   constructor(collection) {
     super(collection);
+    /**
+     * Prevents concurrency in process_embed_queue().
+     * @type {boolean}
+     * @private
+     */
+    this._is_processing_embed_queue = false;
     this._reset_embed_queue_stats();
   }
+
   /**
    * Find the nearest entities to the given vector.
    * @async
@@ -94,84 +102,96 @@ export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
 
   /**
    * Process a queue of entities waiting to be embedded.
-   * Typically, this will call embed_batch in batches and update entities.
+   * Prevents multiple concurrent runs by using `_is_processing_embed_queue`.
    * @async
    * @returns {Promise<void>}
    */
   async process_embed_queue() {
-    const embed_queue = this.collection.embed_queue;
-    // Reset stats as in SmartEntities
-    this._reset_embed_queue_stats();
-    
-    if (this.collection.embed_model_key === "None") {
-      console.log(`Smart Connections: No active embedding model for ${this.collection.collection_key}, skipping embedding`);
+    if (this._is_processing_embed_queue) {
+      console.log("process_embed_queue is already running, skipping concurrent call.");
       return;
     }
+    this._is_processing_embed_queue = true;
 
-    if (!this.collection.embed_model) {
-      console.log(`Smart Connections: No active embedding model for ${this.collection.collection_key}, skipping embedding`);
-      return;
-    }
-
-    const datetime_start = new Date();
-    if (!embed_queue.length) {
-      return console.log(`Smart Connections: No items in ${this.collection.collection_key} embed queue`);
-    }
-
-    console.log(`Time spent getting embed queue: ${(new Date()).getTime() - datetime_start.getTime()}ms`);
-    console.log(`Processing ${this.collection.collection_key} embed queue: ${embed_queue.length} items`);
-
-    // Process in batches according to embed_model.batch_size
-    for (let i = 0; i < embed_queue.length; i += this.collection.embed_model.batch_size) {
-      if (this.is_queue_halted) {
-        this.is_queue_halted = false; // reset halt after break
-        break;
+    try {
+      const embed_queue = this.collection.embed_queue;
+      // Reset stats as in SmartEntities
+      this._reset_embed_queue_stats();
+      
+      if (this.collection.embed_model_key === "None") {
+        console.log(`Smart Connections: No active embedding model for ${this.collection.collection_key}, skipping embedding`);
+        return;
       }
-      const batch = embed_queue.slice(i, i + this.collection.embed_model.batch_size);
 
-      // Prepare input
-      await Promise.all(batch.map(item => item.get_embed_input()));
+      if (!this.collection.embed_model) {
+        console.log(`Smart Connections: No active embedding model for ${this.collection.collection_key}, skipping embedding`);
+        return;
+      }
 
-      // Embed batch
-      try {
-        const start_time = Date.now();
-        await this.embed_batch(batch);
-        this.total_time += Date.now() - start_time;
-      } catch (e) {
-        if (e && e.message && e.message.includes("API key not set")) {
-          this.halt_embed_queue_processing(`API key not set for ${this.collection.embed_model_key}\nPlease set the API key in the settings.`);
+      const datetime_start = new Date();
+      if (!embed_queue.length) {
+        console.log(`Smart Connections: No items in ${this.collection.collection_key} embed queue`);
+        return;
+      }
+
+      console.log(`Time spent getting embed queue: ${(new Date()).getTime() - datetime_start.getTime()}ms`);
+      console.log(`Processing ${this.collection.collection_key} embed queue: ${embed_queue.length} items`);
+
+      // Process in batches according to embed_model.batch_size
+      for (let i = 0; i < embed_queue.length; i += this.collection.embed_model.batch_size) {
+        if (this.is_queue_halted) {
+          this.is_queue_halted = false; // reset halt after break
+          break;
         }
-        console.error(e);
-        console.error(`Error processing ${this.collection.collection_key} embed queue: ` + JSON.stringify((e || {}), null, 2));
-      }
+        const batch = embed_queue.slice(i, i + this.collection.embed_model.batch_size);
 
-      // Update hash and stats
-      batch.forEach(item => {
-        item.embed_hash = item.read_hash;
-        item._queue_save = true;
-      });
-      this.embedded_total += batch.length;
-      this.total_tokens += batch.reduce((acc, item) => acc + (item.tokens || 0), 0);
+        // Prepare input
+        await Promise.all(batch.map(item => item.get_embed_input()));
 
-      // Show progress notice every ~100 items
-      this._show_embed_progress_notice(embed_queue.length);
+        // Embed batch
+        try {
+          const start_time = Date.now();
+          await this.embed_batch(batch);
+          this.total_time += Date.now() - start_time;
+        } catch (e) {
+          if (e && e.message && e.message.includes("API key not set")) {
+            this.halt_embed_queue_processing(`API key not set for ${this.collection.embed_model_key}\nPlease set the API key in the settings.`);
+          }
+          console.error(e);
+          console.error(`Error processing ${this.collection.collection_key} embed queue: ` + JSON.stringify((e || {}), null, 2));
+        }
 
-      // Process save queue every 1000 items
-      if (this.embedded_total - this.last_save_total > 1000) {
-        this.last_save_total = this.embedded_total;
-        await this.collection.process_save_queue();
-        if(this.collection.block_collection) {
-          console.log(`Saving ${this.collection.block_collection.collection_key} block collection`);
-          await this.collection.block_collection.process_save_queue();
+        // Update hash and stats
+        batch.forEach(item => {
+          item.embed_hash = item.read_hash;
+          item._queue_save = true;
+        });
+        this.embedded_total += batch.length;
+        this.total_tokens += batch.reduce((acc, item) => acc + (item.tokens || 0), 0);
+
+        // Show progress notice every ~100 items
+        this._show_embed_progress_notice(embed_queue.length);
+
+        // Process save queue every 1000 items
+        if (this.embedded_total - this.last_save_total > 1000) {
+          this.last_save_total = this.embedded_total;
+          await this.collection.process_save_queue();
+          if(this.collection.block_collection) {
+            console.log(`Saving ${this.collection.block_collection.collection_key} block collection`);
+            await this.collection.block_collection.process_save_queue();
+          }
         }
       }
-    }
 
-    // Show completion notice
-    this._show_embed_completion_notice(embed_queue.length);
-    await this.collection.process_save_queue();
-    if(this.collection.block_collection) {
-      await this.collection.block_collection.process_save_queue();
+      // Show completion notice
+      this._show_embed_completion_notice(embed_queue.length);
+      await this.collection.process_save_queue();
+      if(this.collection.block_collection) {
+        await this.collection.block_collection.process_save_queue();
+      }
+    } finally {
+      // Always clear the concurrency flag, even on errors or halts
+      this._is_processing_embed_queue = false;
     }
   }
 
@@ -183,19 +203,14 @@ export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
   _show_embed_progress_notice(embed_queue_length) {
     if (this.embedded_total - this.last_notice_embedded_total < 100) return;
     this.last_notice_embedded_total = this.embedded_total;
-    const pause_btn = { text: "Pause", callback: this.halt_embed_queue_processing.bind(this), stay_open: true };
-    this.notices?.show('embedding_progress',
-      [
-        `Making Smart Connections...`,
-        `Embedding progress: ${this.embedded_total} / ${embed_queue_length}`,
-        `${this._calculate_embed_tokens_per_second()} tokens/sec using ${this.collection.embed_model_key}`
-      ],
-      {
-        timeout: 0,
-        button: pause_btn
-      }
-    );
+    this.notices?.show('embedding_progress', {
+      progress: this.embedded_total,
+      total: embed_queue_length,
+      tokens_per_second: this._calculate_embed_tokens_per_second(),
+      model_name: this.collection.embed_model_key
+    });
   }
+
   /**
    * Displays the embedding completion notice.
    * @private
@@ -203,12 +218,13 @@ export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
    */
   _show_embed_completion_notice() {
     this.notices?.remove('embedding_progress');
-    this.notices?.show('embedding_complete', [
-      `Embedding complete.`,
-      `${this.embedded_total} entities embedded.`,
-      `${this._calculate_embed_tokens_per_second()} tokens/sec using ${this.collection.embed_model_key}`
-    ], { timeout: 10000 });
+    this.notices?.show('embedding_complete', {
+      total_embeddings: this.embedded_total,
+      tokens_per_second: this._calculate_embed_tokens_per_second(),
+      model_name: this.collection.embed_model_key
+    });
   }
+
   /**
    * Halts the embed queue processing.
    * @param {string|null} msg - Optional message.
@@ -217,16 +233,14 @@ export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
     this.is_queue_halted = true;
     console.log("Embed queue processing halted");
     this.notices?.remove('embedding_progress');
-    this.notices?.show('embedding_paused', [
-      msg || `Embedding paused.`,
-      `Progress: ${this.embedded_total} / ${this.collection._embed_queue.length}`,
-      `${this._calculate_embed_tokens_per_second()} tokens/sec using ${this.collection.embed_model_key}`
-    ],
-      {
-        timeout: 0,
-        button: { text: "Resume", callback: () => this.resume_embed_queue_processing(100) }
-      });
+    this.notices?.show('embedding_paused', {
+      progress: this.embedded_total,
+      total: this.collection._embed_queue.length,
+      tokens_per_second: this._calculate_embed_tokens_per_second(),
+      model_name: this.collection.embed_model_key
+    });
   }
+
   /**
    * Resumes the embed queue processing after a delay.
    * @param {number} [delay=0] - The delay in milliseconds before resuming.
@@ -240,6 +254,7 @@ export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
       this.process_embed_queue();
     }, delay);
   }
+
   /**
    * Calculates the number of tokens processed per second.
    * @private
@@ -247,8 +262,9 @@ export class DefaultEntitiesVectorAdapter extends EntitiesVectorAdapter {
    */
   _calculate_embed_tokens_per_second() {
     const elapsed_time = this.total_time / 1000;
-    return Math.round(this.total_tokens / elapsed_time);
+    return Math.round(this.total_tokens / (elapsed_time || 1));
   }
+
   /**
    * Resets the statistics related to embed queue processing.
    * @private
@@ -323,7 +339,6 @@ export class DefaultEntityVectorAdapter extends EntityVectorAdapter {
     }
     this.item.data.embeddings[this.item.embed_model_key].vec = vec;
   }
-
 }
 
 export default {
